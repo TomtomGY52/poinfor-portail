@@ -2,12 +2,13 @@ import os
 import json
 import uuid
 import time
+import zipfile
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException, status
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="Portail POINFOR x GTLA", version="1.0.0")
+app = FastAPI(title="Portail POINFOR x GTLA", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,7 +69,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
     }
     .container {
       width: 100%;
-      max-width: 640px;
+      max-width: 680px;
       background: #ffffff;
       border-radius: 20px;
       box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.35);
@@ -149,52 +150,136 @@ HTML_CONTENT = r"""<!DOCTYPE html>
     }
     .drop-zone {
       border: 2px dashed #cbd5e1;
-      border-radius: 14px;
-      padding: 35px 20px;
+      border-radius: 16px;
+      padding: 30px 20px;
       text-align: center;
       background: #f8fafc;
-      cursor: pointer;
       transition: all 0.2s ease;
       position: relative;
     }
-    .drop-zone:hover, .drop-zone.dragover {
+    .drop-zone.dragover {
       border-color: #2563eb;
       background: #eff6ff;
+      transform: scale(1.01);
     }
     .drop-zone-icon {
-      font-size: 40px;
+      font-size: 42px;
       margin-bottom: 10px;
       display: block;
     }
     .drop-zone-text {
-      font-size: 14px;
+      font-size: 15px;
       font-weight: 600;
-      color: #334155;
+      color: #1e293b;
       margin-bottom: 4px;
     }
     .drop-zone-hint {
       font-size: 12px;
       color: #64748b;
+      margin-bottom: 16px;
     }
-    .file-input {
-      position: absolute;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      opacity: 0;
-      cursor: pointer;
+    .drop-zone-buttons {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
     }
-    .selected-file {
-      display: none;
-      margin-top: 12px;
-      padding: 10px 14px;
-      background: #ecfdf5;
-      border: 1px solid #a7f3d0;
+    .btn-select {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 18px;
       border-radius: 10px;
       font-size: 13px;
-      color: #065f46;
-      font-weight: 500;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: 1px solid transparent;
+    }
+    .btn-select-file {
+      background: #eff6ff;
+      color: #1d4ed8;
+      border-color: #bfdbfe;
+    }
+    .btn-select-file:hover {
+      background: #dbeafe;
+      border-color: #93c5fd;
+    }
+    .btn-select-folder {
+      background: #f5f3ff;
+      color: #6d28d9;
+      border-color: #ddd6fe;
+    }
+    .btn-select-folder:hover {
+      background: #ede9fe;
+      border-color: #c4b5fd;
+    }
+    .selected-summary {
+      display: none;
+      margin-top: 14px;
+      padding: 14px 18px;
+      background: #ecfdf5;
+      border: 1.5px solid #a7f3d0;
+      border-radius: 12px;
       align-items: center;
       justify-content: space-between;
+      gap: 12px;
+    }
+    .summary-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    .summary-icon {
+      font-size: 26px;
+      flex-shrink: 0;
+    }
+    .summary-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #065f46;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 380px;
+    }
+    .summary-details {
+      font-size: 12px;
+      color: #047857;
+      margin-top: 2px;
+    }
+    .btn-remove {
+      background: transparent;
+      border: 1px solid #fecaca;
+      background: #fef2f2;
+      color: #dc2626;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: all 0.2s;
+    }
+    .btn-remove:hover {
+      background: #fee2e2;
+    }
+    .progress-bar-container {
+      display: none;
+      width: 100%;
+      height: 8px;
+      background: #e2e8f0;
+      border-radius: 4px;
+      margin-top: 15px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      width: 0%;
+      height: 100%;
+      background: #2563eb;
+      transition: width 0.3s;
     }
     .btn-submit {
       width: 100%;
@@ -213,6 +298,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
       align-items: center;
       justify-content: center;
       gap: 10px;
+      margin-top: 10px;
     }
     .btn-submit:hover:not(:disabled) {
       transform: translateY(-1px);
@@ -221,6 +307,18 @@ HTML_CONTENT = r"""<!DOCTYPE html>
     .btn-submit:disabled {
       opacity: 0.6;
       cursor: not-allowed;
+    }
+    .spinner {
+      display: none;
+      width: 20px;
+      height: 20px;
+      border: 2px solid #ffffff;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
     }
     .features-list {
       margin-top: 25px;
@@ -273,33 +371,6 @@ HTML_CONTENT = r"""<!DOCTYPE html>
       font-size: 13px;
       color: #334155;
     }
-    .progress-bar-container {
-      display: none;
-      width: 100%;
-      height: 8px;
-      background: #e2e8f0;
-      border-radius: 4px;
-      margin-top: 15px;
-      overflow: hidden;
-    }
-    .progress-bar-fill {
-      width: 0%;
-      height: 100%;
-      background: #2563eb;
-      transition: width 0.3s;
-    }
-    .spinner {
-      display: none;
-      width: 20px;
-      height: 20px;
-      border: 2px solid #ffffff;
-      border-top-color: transparent;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
   </style>
 </head>
 <body>
@@ -313,28 +384,48 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         <span class="badge-env">POINFOR Formation • IA de Contrôle</span>
       </div>
       <h1>Plateforme de Tri & Validation des Dossiers Stagiaires</h1>
-      <p>Déposez vos dossiers de formation (archive .zip) pour classification automatique, redressement des scans, vérification des signatures par Vision IA et génération des livrables.</p>
+      <p>Déposez vos documents de formation (fichiers PDF, scans multi-pages, dossiers complets ou archives .ZIP) pour analyse, redressement, dissociation et contrôle des signatures par Vision IA.</p>
     </div>
 
     <div class="content" id="formContainer">
-      <form id="uploadForm" enctype="multipart/form-data">
+      <form id="uploadForm">
         <div class="form-group">
           <label for="email">Votre adresse email professionnelle (réception des livrables) *</label>
           <input type="email" id="email" name="email" class="input-text" placeholder="prenom.nom@poinfor.fr ou @gtla.fr" required>
         </div>
 
         <div class="form-group">
-          <label>Dossier compressé des stagiaires (.zip) *</label>
+          <label>Dossiers ou documents à analyser (PDF, Dossier ou ZIP) *</label>
           <div class="drop-zone" id="dropZone">
-            <span class="drop-zone-icon">📁</span>
-            <div class="drop-zone-text">Glissez-déposez votre archive ZIP ici</div>
-            <div class="drop-zone-hint">ou cliquez pour sélectionner sur votre ordinateur</div>
-            <input type="file" id="zipfile" name="zipfile" class="file-input" accept=".zip" required>
+            <span class="drop-zone-icon">📂</span>
+            <div class="drop-zone-text">Glissez-déposez vos fichiers ou dossiers ici</div>
+            <div class="drop-zone-hint">Compatible scans PDF (mono ou multi-pages), dossiers complets et archives .ZIP</div>
+
+            <div class="drop-zone-buttons">
+              <button type="button" class="btn-select btn-select-file" id="btnPickFiles">
+                <span>📄</span> Sélectionner des fichiers (PDF / ZIP)
+              </button>
+              <button type="button" class="btn-select btn-select-folder" id="btnPickFolder">
+                <span>📁</span> Sélectionner un dossier complet
+              </button>
+            </div>
+
+            <!-- Inputs cachés -->
+            <input type="file" id="filesInput" multiple accept=".pdf,.zip" style="display: none;">
+            <input type="file" id="folderInput" webkitdirectory directory multiple style="display: none;">
           </div>
-          <div class="selected-file" id="selectedFile">
-            <span id="fileName">mon_archive.zip</span>
-            <span id="fileSize" style="color: #64748b; font-size: 12px;"></span>
+
+          <div class="selected-summary" id="selectedSummary">
+            <div class="summary-left">
+              <span class="summary-icon" id="summaryIcon">📄</span>
+              <div>
+                <div class="summary-title" id="summaryTitle">Fichier sélectionné</div>
+                <div class="summary-details" id="summaryDetails">0 Mo</div>
+              </div>
+            </div>
+            <button type="button" class="btn-remove" id="btnRemove">✕ Retirer</button>
           </div>
+
           <div class="progress-bar-container" id="progressContainer">
             <div class="progress-bar-fill" id="progressBar"></div>
           </div>
@@ -342,24 +433,26 @@ HTML_CONTENT = r"""<!DOCTYPE html>
 
         <button type="submit" class="btn-submit" id="submitBtn">
           <span class="spinner" id="spinner"></span>
-          <span id="btnText">🚀 Transmettre le dossier pour analyse IA</span>
+          <span id="btnText">🚀 Transmettre pour analyse & tri IA</span>
         </button>
       </form>
 
       <div class="features-list">
         <span>🔄 Redressement auto des scans (0°, 90°, 180°)</span>
+        <span>✂️ Découpage & fusion automatique par stagiaire</span>
         <span>🧠 Modèle IA local Qwen 2.5 7B</span>
         <span>✍️ Contrôle des signatures par Vision IA</span>
         <span>📊 Tableur Excel & Archive ZIP par email</span>
+        <span>🔒 Traitement 100% sécurisé et souverain</span>
       </div>
     </div>
 
     <!-- Écran de confirmation après envoi -->
     <div class="content success-screen" id="successScreen">
       <div class="success-icon">✅</div>
-      <h3>Dossier transmis avec succès !</h3>
+      <h3>Documents transmis avec succès !</h3>
       <p>
-        Votre archive de stagiaires a bien été réceptionnée sur la plateforme sécurisée. Le moteur d'intelligence artificielle locale procède au redressement, à la classification et au contrôle minutieux des signatures manuscrites.
+        Vos documents ont bien été réceptionnés sur la plateforme sécurisée. Le moteur d'intelligence artificielle locale procède au redressement, à la dissociation des scans volumineux, à la classification et au contrôle des signatures manuscrites.
       </p>
       <div class="success-details">
         <p style="margin-bottom: 6px;"><strong>📬 Email de notification :</strong> <span id="targetEmail" style="color: #2563eb;"></span></p>
@@ -371,17 +464,22 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         </ul>
       </div>
       <button onclick="window.location.reload()" style="margin-top: 20px; padding: 10px 20px; background: #e2e8f0; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; color: #334155;">
-        Déposer un autre dossier
+        Déposer d'autres documents
       </button>
     </div>
   </div>
 
   <script>
-    const fileInput = document.getElementById('zipfile');
     const dropZone = document.getElementById('dropZone');
-    const selectedFile = document.getElementById('selectedFile');
-    const fileName = document.getElementById('fileName');
-    const fileSize = document.getElementById('fileSize');
+    const filesInput = document.getElementById('filesInput');
+    const folderInput = document.getElementById('folderInput');
+    const btnPickFiles = document.getElementById('btnPickFiles');
+    const btnPickFolder = document.getElementById('btnPickFolder');
+    const selectedSummary = document.getElementById('selectedSummary');
+    const summaryIcon = document.getElementById('summaryIcon');
+    const summaryTitle = document.getElementById('summaryTitle');
+    const summaryDetails = document.getElementById('summaryDetails');
+    const btnRemove = document.getElementById('btnRemove');
     const form = document.getElementById('uploadForm');
     const submitBtn = document.getElementById('submitBtn');
     const spinner = document.getElementById('spinner');
@@ -392,18 +490,105 @@ HTML_CONTENT = r"""<!DOCTYPE html>
     const progressContainer = document.getElementById('progressContainer');
     const progressBar = document.getElementById('progressBar');
 
-    fileInput.addEventListener('change', () => {
-      if (fileInput.files.length > 0) {
-        const file = fileInput.files[0];
-        fileName.textContent = '📄 ' + file.name;
-        fileSize.textContent = (file.size / (1024 * 1024)).toFixed(2) + ' Mo';
-        selectedFile.style.display = 'flex';
+    // Liste des fichiers prêts à être envoyés : [{ file: File, path: string }]
+    let collectedItems = [];
+
+    btnPickFiles.addEventListener('click', (e) => {
+      e.stopPropagation();
+      filesInput.click();
+    });
+
+    btnPickFolder.addEventListener('click', (e) => {
+      e.stopPropagation();
+      folderInput.click();
+    });
+
+    filesInput.addEventListener('change', () => {
+      if (filesInput.files && filesInput.files.length > 0) {
+        const items = [];
+        for (let i = 0; i < filesInput.files.length; i++) {
+          const f = filesInput.files[i];
+          items.push({ file: f, path: f.name });
+        }
+        setSelection(items);
       }
     });
 
+    folderInput.addEventListener('change', () => {
+      if (folderInput.files && folderInput.files.length > 0) {
+        const items = [];
+        for (let i = 0; i < folderInput.files.length; i++) {
+          const f = folderInput.files[i];
+          items.push({ file: f, path: f.webkitRelativePath || f.name });
+        }
+        setSelection(items);
+      }
+    });
+
+    btnRemove.addEventListener('click', () => {
+      clearSelection();
+    });
+
+    function formatSize(bytes) {
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' Ko';
+      return (bytes / (1024 * 1024)).toFixed(2) + ' Mo';
+    }
+
+    function clearSelection() {
+      collectedItems = [];
+      filesInput.value = '';
+      folderInput.value = '';
+      selectedSummary.style.display = 'none';
+    }
+
+    function setSelection(items) {
+      // Filtrer les fichiers indésirables système (.DS_Store, Thumbs.db, etc.)
+      const filtered = items.filter(it => {
+        const p = it.path;
+        return !p.includes('.DS_Store') && !p.includes('Thumbs.db') && !p.includes('__MACOSX');
+      });
+
+      if (!filtered.length) {
+        alert("Aucun document valide n'a été détecté.");
+        clearSelection();
+        return;
+      }
+
+      collectedItems = filtered;
+      const totalBytes = collectedItems.reduce((acc, it) => acc + (it.file.size || 0), 0);
+      const count = collectedItems.length;
+
+      // Détecter la nature de la sélection
+      const hasZip = collectedItems.some(it => it.file.name.toLowerCase().endsWith('.zip'));
+      const hasFolder = collectedItems.some(it => it.path.includes('/'));
+
+      if (count === 1 && hasZip) {
+        summaryIcon.textContent = '📦';
+        summaryTitle.textContent = collectedItems[0].file.name;
+        summaryDetails.textContent = 'Archive ZIP compressée • ' + formatSize(totalBytes);
+      } else if (hasFolder) {
+        summaryIcon.textContent = '📁';
+        const rootFolder = collectedItems[0].path.split('/')[0];
+        summaryTitle.textContent = 'Dossier : ' + rootFolder;
+        summaryDetails.textContent = count + ' document(s) trouvé(s) • ' + formatSize(totalBytes);
+      } else if (count === 1) {
+        summaryIcon.textContent = '📄';
+        summaryTitle.textContent = collectedItems[0].file.name;
+        summaryDetails.textContent = 'Document PDF scanné • ' + formatSize(totalBytes);
+      } else {
+        summaryIcon.textContent = '📑';
+        summaryTitle.textContent = count + ' fichiers sélectionnés';
+        summaryDetails.textContent = formatSize(totalBytes) + ' au total';
+      }
+
+      selectedSummary.style.display = 'flex';
+    }
+
+    // Gestion Drag & Drop (avec support récursif des dossiers)
     ['dragenter', 'dragover'].forEach(eventName => {
       dropZone.addEventListener(eventName, e => {
         e.preventDefault();
+        e.stopPropagation();
         dropZone.classList.add('dragover');
       });
     });
@@ -411,17 +596,81 @@ HTML_CONTENT = r"""<!DOCTYPE html>
     ['dragleave', 'drop'].forEach(eventName => {
       dropZone.addEventListener(eventName, e => {
         e.preventDefault();
+        e.stopPropagation();
         dropZone.classList.remove('dragover');
       });
     });
 
+    dropZone.addEventListener('drop', async (e) => {
+      const items = e.dataTransfer.items;
+      if (!items || !items.length) {
+        if (e.dataTransfer.files && e.dataTransfer.files.length) {
+          const list = [];
+          for (let i = 0; i < e.dataTransfer.files.length; i++) {
+            const f = e.dataTransfer.files[i];
+            list.push({ file: f, path: f.name });
+          }
+          setSelection(list);
+        }
+        return;
+      }
+
+      const queue = [];
+      for (let i = 0; i < items.length; i++) {
+        const entry = items[i].webkitGetAsEntry ? items[i].webkitGetAsEntry() : null;
+        if (entry) queue.push({ entry, currentPath: '' });
+      }
+
+      if (!queue.length) {
+        const list = [];
+        for (let i = 0; i < e.dataTransfer.files.length; i++) {
+          const f = e.dataTransfer.files[i];
+          list.push({ file: f, path: f.name });
+        }
+        setSelection(list);
+        return;
+      }
+
+      // Parcours asynchrone des répertoires et fichiers
+      const collected = [];
+
+      async function readAllEntries(dirReader) {
+        const entries = [];
+        let batch;
+        do {
+          batch = await new Promise((res, rej) => dirReader.readEntries(res, rej));
+          if (batch && batch.length) entries.push(...batch);
+        } while (batch && batch.length > 0);
+        return entries;
+      }
+
+      async function processEntry(entry, curPath) {
+        if (entry.isFile) {
+          const file = await new Promise((res, rej) => entry.file(res, rej));
+          collected.push({ file, path: curPath + file.name });
+        } else if (entry.isDirectory) {
+          const reader = entry.createReader();
+          const children = await readAllEntries(reader);
+          for (const c of children) {
+            await processEntry(c, curPath + entry.name + '/');
+          }
+        }
+      }
+
+      for (const item of queue) {
+        await processEntry(item.entry, item.currentPath);
+      }
+
+      setSelection(collected);
+    });
+
+    // Envoi du formulaire
     form.addEventListener('submit', function(e) {
       e.preventDefault();
       const email = document.getElementById('email').value.trim();
-      const file = fileInput.files[0];
 
-      if (!file) {
-        alert('Veuillez sélectionner une archive ZIP.');
+      if (!collectedItems.length) {
+        alert('Veuillez sélectionner au moins un fichier PDF, un dossier ou une archive ZIP.');
         return;
       }
 
@@ -432,7 +681,13 @@ HTML_CONTENT = r"""<!DOCTYPE html>
 
       const formData = new FormData();
       formData.append('email', email);
-      formData.append('zipfile', file);
+
+      const paths = [];
+      collectedItems.forEach(it => {
+        formData.append('files', it.file);
+        paths.push(it.path);
+      });
+      formData.append('file_paths', JSON.stringify(paths));
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/upload', true);
@@ -451,10 +706,15 @@ HTML_CONTENT = r"""<!DOCTYPE html>
           formContainer.style.display = 'none';
           successScreen.style.display = 'block';
         } else {
-          alert("Erreur lors de la transmission du dossier : " + xhr.responseText);
+          let msg = xhr.responseText;
+          try {
+            const j = JSON.parse(xhr.responseText);
+            if (j.detail) msg = j.detail;
+          } catch (_) {}
+          alert("Erreur lors de la transmission : " + msg);
           submitBtn.disabled = false;
           spinner.style.display = 'none';
-          btnText.textContent = "🚀 Transmettre le dossier pour analyse IA";
+          btnText.textContent = "🚀 Transmettre pour analyse & tri IA";
           progressContainer.style.display = 'none';
         }
       };
@@ -463,7 +723,7 @@ HTML_CONTENT = r"""<!DOCTYPE html>
         alert("Erreur réseau lors de l'envoi.");
         submitBtn.disabled = false;
         spinner.style.display = 'none';
-        btnText.textContent = "🚀 Transmettre le dossier pour analyse IA";
+        btnText.textContent = "🚀 Transmettre pour analyse & tri IA";
         progressContainer.style.display = 'none';
       };
 
@@ -483,24 +743,79 @@ def health():
     return {"status": "ok", "timestamp": time.time()}
 
 @app.post("/upload")
-async def upload_file(email: str = Form(...), zipfile: UploadFile = File(...)):
-    if not zipfile.filename.lower().endswith(".zip"):
-        raise HTTPException(status_code=400, detail="Seuls les fichiers .zip sont autorisés.")
-    
-    job_id = str(uuid.uuid4())[:8]
-    safe_filename = f"{job_id}_{Path(zipfile.filename).name}"
-    target_path = UPLOADS_DIR / safe_filename
+async def upload_file(
+    email: str = Form(...),
+    files: list[UploadFile] = File(default=[]),
+    file_paths: str = Form(default="[]"),
+    zipfile_legacy: UploadFile = File(default=None, alias="zipfile")
+):
+    upload_list = list(files)
+    if zipfile_legacy and zipfile_legacy.filename:
+        upload_list.append(zipfile_legacy)
 
-    contents = await zipfile.read()
-    target_path.write_bytes(contents)
+    if not upload_list:
+        raise HTTPException(status_code=400, detail="Aucun document n'a été transmis.")
+
+    try:
+        parsed_paths = json.loads(file_paths)
+    except Exception:
+        parsed_paths = []
+
+    valid_items = []
+    for i, f in enumerate(upload_list):
+        fname = f.filename or ""
+        rpath = parsed_paths[i] if i < len(parsed_paths) else fname
+        if not rpath:
+            rpath = fname
+        rpath = rpath.replace("\\", "/").lstrip("/")
+        if any(bad in rpath for bad in [".DS_Store", "Thumbs.db", "__MACOSX"]):
+            continue
+        valid_items.append((f, rpath))
+
+    if not valid_items:
+        raise HTTPException(status_code=400, detail="Aucun document valide trouvé dans le dépôt.")
+
+    job_id = str(uuid.uuid4())[:8]
+
+    # Cas 1 : Archive ZIP unique déjà compressée
+    if len(valid_items) == 1 and valid_items[0][0].filename.lower().endswith(".zip"):
+        f, rpath = valid_items[0]
+        safe_filename = f"{job_id}_{Path(f.filename).name}"
+        target_path = UPLOADS_DIR / safe_filename
+        contents = await f.read()
+        target_path.write_bytes(contents)
+        file_size = len(contents)
+        orig_name = f.filename
+
+    # Cas 2 : Un ou plusieurs fichiers PDF, ou un dossier complet
+    else:
+        safe_filename = f"{job_id}_dossier_stagiaires.zip"
+        target_path = UPLOADS_DIR / safe_filename
+
+        # Nom lisible du dépôt
+        if len(valid_items) == 1:
+            orig_name = Path(valid_items[0][0].filename).name
+        else:
+            first_path = valid_items[0][1]
+            if "/" in first_path:
+                orig_name = f"{first_path.split('/')[0]}.zip"
+            else:
+                orig_name = "lot_documents_stagiaires.zip"
+
+        with zipfile.ZipFile(target_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for f, rpath in valid_items:
+                contents = await f.read()
+                zf.writestr(rpath, contents)
+
+        file_size = target_path.stat().st_size
 
     jobs = get_jobs()
     job_data = {
         "job_id": job_id,
         "email": email.strip(),
-        "original_filename": zipfile.filename,
+        "original_filename": orig_name,
         "stored_filename": safe_filename,
-        "file_size_bytes": len(contents),
+        "file_size_bytes": file_size,
         "status": "PENDING",
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
     }
@@ -510,7 +825,7 @@ async def upload_file(email: str = Form(...), zipfile: UploadFile = File(...)):
     return JSONResponse(content={
         "success": True,
         "job_id": job_id,
-        "message": "Dossier enregistré avec succès dans la file d'attente de traitement."
+        "message": "Dossier(s) enregistré(s) avec succès dans la file d'attente de traitement."
     })
 
 # API Sécurisée pour l'agent IA Local sur votre PC
